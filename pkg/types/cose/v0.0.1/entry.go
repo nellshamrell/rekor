@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -50,6 +51,8 @@ const (
 
 const (
 	CurveP256 = "P-256"
+	CurveP384 = "P-384"
+	CurveP521 = "P-521"
 )
 
 func init() {
@@ -138,7 +141,45 @@ func (v V001Entry) IndexKeys() ([]string, error) {
 		}
 	}
 
+	// If the protected header carries SCITT/CWT_Claims (label 15), index the
+	// issuer (iss=1) and subject (sub=2) so the log is queryable by SCITT
+	// identity. Missing or malformed claims are ignored (best-effort indexing).
+	if rawClaims, ok := v.sign1Msg.Headers.Protected[gocose.HeaderLabelCWTClaims]; ok {
+		if claims, ok := rawClaims.(map[any]any); ok {
+			if key, ok := cwtIndexKey(claims, gocose.CWTClaimIssuer, "cwt:iss:"); ok {
+				result = append(result, key)
+			}
+			if key, ok := cwtIndexKey(claims, gocose.CWTClaimSubject, "cwt:sub:"); ok {
+				result = append(result, key)
+			}
+		}
+	}
+
 	return result, nil
+}
+
+// maxIndexKeyLength bounds the length of an index key. The index storage
+// layers cap key length (MySQL uses VARCHAR(512)), so oversized keys are
+// skipped rather than risking a failed or truncated index write.
+const maxIndexKeyLength = 512
+
+// cwtIndexKey returns the namespaced index key for a CWT claim if the claim is
+// present, a non-empty string, and the resulting key fits within the index key
+// length bound. CBOR integer labels decode as int64.
+func cwtIndexKey(claims map[any]any, label int64, prefix string) (string, bool) {
+	raw, ok := claims[label]
+	if !ok {
+		return "", false
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	key := prefix + s
+	if len(key) > maxIndexKeyLength {
+		return "", false
+	}
+	return key, true
 }
 
 func getIntotoStatement(b []byte) (*in_toto.Statement, error) {
@@ -287,13 +328,25 @@ func getPublicKey(pk pki.PublicKey) (gocose.Algorithm, crypto.PublicKey, error) 
 	var alg gocose.Algorithm
 	switch t := cryptoPub.(type) {
 	case *rsa.PublicKey:
+		// The COSE RSASSA-PSS algorithm cannot be disambiguated from the key
+		// alone; default to PS256. The protected-header alg is still enforced
+		// by go-cose during verification.
 		alg = gocose.AlgorithmPS256
 	case *ecdsa.PublicKey:
-		alg = gocose.AlgorithmES256
-		if t.Params().Name != CurveP256 {
+		// The elliptic curve determines the ECDSA COSE algorithm.
+		switch t.Params().Name {
+		case CurveP256:
+			alg = gocose.AlgorithmES256
+		case CurveP384:
+			alg = gocose.AlgorithmES384
+		case CurveP521:
+			alg = gocose.AlgorithmES512
+		default:
 			return invAlg, nil, fmt.Errorf("unsupported elliptic curve %s",
 				t.Params().Name)
 		}
+	case ed25519.PublicKey:
+		alg = gocose.AlgorithmEdDSA
 	default:
 		return invAlg, nil, fmt.Errorf("unsupported algorithm type %T", t)
 	}

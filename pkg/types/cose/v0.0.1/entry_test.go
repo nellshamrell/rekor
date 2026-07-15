@@ -18,7 +18,9 @@ package cose
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,6 +30,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/go-openapi/runtime"
@@ -110,15 +113,21 @@ func p(b []byte) *strfmt.Base64 {
 }
 
 func makeSignedCose(t *testing.T, priv *ecdsa.PrivateKey, payload, aad []byte, contentType interface{}) []byte {
+	return makeSignedCoseWithSigner(t, gocose.AlgorithmES256, priv, payload, aad, contentType)
+}
+
+// makeSignedCoseWithSigner builds a COSE_Sign1 envelope with an arbitrary
+// algorithm/signer, optionally setting the content-type protected header.
+func makeSignedCoseWithSigner(t *testing.T, alg gocose.Algorithm, priv crypto.Signer, payload, aad []byte, contentType interface{}) []byte {
 	m := gocose.NewSign1Message()
 	m.Payload = payload
-	m.Headers.Protected[gocose.HeaderLabelAlgorithm] = gocose.AlgorithmES256
+	m.Headers.Protected[gocose.HeaderLabelAlgorithm] = alg
 
 	if contentType != "" {
 		m.Headers.Protected[gocose.HeaderLabelContentType] = contentType
 	}
 
-	signer, err := gocose.NewSigner(gocose.AlgorithmES256, priv)
+	signer, err := gocose.NewSigner(alg, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,14 +620,14 @@ func TestGetPublicKey(t *testing.T) {
 			t.Error("failed to load public key")
 		}
 		alg, cpk, err := getPublicKey(pk)
-		if alg != gocose.Algorithm(0) {
-			t.Error("unexpected algorithm returned")
+		if alg != gocose.AlgorithmES384 {
+			t.Error("wrong algorithm")
 		}
-		if cpk != nil {
-			t.Error("unexpected key returned")
+		if cpk == nil {
+			t.Error("no public key returned")
 		}
-		if err == nil {
-			t.Error("expected error")
+		if err != nil {
+			t.Errorf("Unexpected error %s", err.Error())
 		}
 	})
 
@@ -628,14 +637,14 @@ func TestGetPublicKey(t *testing.T) {
 			t.Error("failed to load public key")
 		}
 		alg, cpk, err := getPublicKey(pk)
-		if alg != gocose.Algorithm(0) {
-			t.Error("unexpected algorithm returned")
+		if alg != gocose.AlgorithmES512 {
+			t.Error("wrong algorithm")
 		}
-		if cpk != nil {
-			t.Error("unexpected key returned")
+		if cpk == nil {
+			t.Error("no public key returned")
 		}
-		if err == nil {
-			t.Error("expected error")
+		if err != nil {
+			t.Errorf("Unexpected error %s", err.Error())
 		}
 	})
 
@@ -675,17 +684,14 @@ func TestGetPublicKey(t *testing.T) {
 			t.Error("failed to load public key")
 		}
 		alg, cpk, err := getPublicKey(pk)
-		if alg != gocose.Algorithm(0) {
-			t.Error("unexpected algorithm returned")
+		if alg != gocose.AlgorithmEdDSA {
+			t.Error("wrong algorithm")
 		}
-		if cpk != nil {
-			t.Error("unexpected key returned")
+		if cpk == nil {
+			t.Error("no public key returned")
 		}
-		if err == nil {
-			t.Error("expected error")
-		}
-		if err.Error() != "unsupported algorithm type ed25519.PublicKey" {
-			t.Error("expected error")
+		if err != nil {
+			t.Errorf("Unexpected error %s", err.Error())
 		}
 	})
 
@@ -703,14 +709,37 @@ func TestV001Entry_Validate(t *testing.T) {
 	t.Run("invalid public key", func(t *testing.T) {
 		v := V001Entry{}
 		v.CoseObj.Message = []byte("string")
-		v.keyObj, _ = sigx509.NewPublicKey(bytes.NewBufferString(pubKeyEd25519))
+		v.keyObj = testPublicKey(0)
 		err := v.validate()
 		if err == nil {
 			t.Error("expected error")
 			return
 		}
-		if err.Error() != "unsupported algorithm type ed25519.PublicKey" {
+		if err.Error() != "invalid public key type" {
 			t.Error("wrong error returned")
+		}
+	})
+
+	t.Run("ed25519 verifies", func(t *testing.T) {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+		keyObj, err := sigx509.NewPublicKey(bytes.NewReader(pemBytes))
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := makeSignedCoseWithSigner(t, gocose.AlgorithmEdDSA, priv, []byte("payload"), nil, "application/json")
+		v := V001Entry{keyObj: keyObj}
+		v.CoseObj.Message = msg
+		v.CoseObj.Data = &models.CoseV001SchemaData{}
+		if err := v.validate(); err != nil {
+			t.Errorf("unexpected error: %v", err)
 		}
 	})
 
@@ -723,6 +752,192 @@ func mustContain(t *testing.T, want string, l []string) {
 		}
 	}
 	t.Fatalf("list %v does not contain %s", l, want)
+}
+
+func mustNotContainPrefix(t *testing.T, prefix string, l []string) {
+	for _, s := range l {
+		if strings.HasPrefix(s, prefix) {
+			t.Fatalf("list %v unexpectedly contains an entry with prefix %s", l, prefix)
+		}
+	}
+}
+
+// ecdsaPub marshals an ECDSA public key to a PEM block for use as a
+// Rekor cose publicKey.
+func ecdsaPub(t *testing.T, priv *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+// TestValidateAlgorithms proves the cose type accepts COSE_Sign1 envelopes
+// signed with the broadened algorithm set (ES256/384/512 + EdDSA), while a
+// curve/header mismatch is still rejected by go-cose during verification.
+func TestValidateAlgorithms(t *testing.T) {
+	newECDSA := func(c elliptic.Curve) (crypto.Signer, []byte) {
+		priv, err := ecdsa.GenerateKey(c, rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return priv, ecdsaPub(t, priv)
+	}
+	newEd25519 := func() (crypto.Signer, []byte) {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return priv, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	}
+
+	cases := []struct {
+		name string
+		alg  gocose.Algorithm
+		new  func() (crypto.Signer, []byte)
+	}{
+		{"ES256", gocose.AlgorithmES256, func() (crypto.Signer, []byte) { return newECDSA(elliptic.P256()) }},
+		{"ES384", gocose.AlgorithmES384, func() (crypto.Signer, []byte) { return newECDSA(elliptic.P384()) }},
+		{"ES512", gocose.AlgorithmES512, func() (crypto.Signer, []byte) { return newECDSA(elliptic.P521()) }},
+		{"EdDSA", gocose.AlgorithmEdDSA, newEd25519},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			signer, pub := tc.new()
+			msg := makeSignedCoseWithSigner(t, tc.alg, signer, []byte("payload"), nil, "application/json")
+			keyObj, err := sigx509.NewPublicKey(bytes.NewReader(pub))
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := V001Entry{keyObj: keyObj}
+			v.CoseObj.Message = msg
+			v.CoseObj.Data = &models.CoseV001SchemaData{}
+			if err := v.validate(); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	t.Run("curve/header mismatch rejected", func(t *testing.T) {
+		// Sign with a P-256 key but advertise ES512 in the protected header.
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := makeSignedCoseWithSigner(t, gocose.AlgorithmES512, priv, []byte("payload"), nil, "application/json")
+		keyObj, err := sigx509.NewPublicKey(bytes.NewReader(ecdsaPub(t, priv)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := V001Entry{keyObj: keyObj}
+		v.CoseObj.Message = msg
+		v.CoseObj.Data = &models.CoseV001SchemaData{}
+		if err := v.validate(); err == nil {
+			t.Error("expected verification error for curve/header mismatch")
+		}
+	})
+}
+
+// TestV001Entry_IndexKeysCWTClaims verifies SCITT CWT_Claims (iss/sub) in the
+// protected header are indexed, and that malformed claims are safely ignored.
+func TestV001Entry_IndexKeysCWTClaims(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := ecdsaPub(t, priv)
+	keyObj, err := sigx509.NewPublicKey(bytes.NewReader(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	build := func(t *testing.T, claims interface{}) []string {
+		m := gocose.NewSign1Message()
+		m.Payload = []byte(`{"artifact":"example"}`)
+		m.Headers.Protected[gocose.HeaderLabelAlgorithm] = gocose.AlgorithmES256
+		if claims != nil {
+			m.Headers.Protected[gocose.HeaderLabelCWTClaims] = claims
+		}
+		signer, err := gocose.NewSigner(gocose.AlgorithmES256, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Sign(rand.Reader, nil, signer); err != nil {
+			t.Fatal(err)
+		}
+		msg, err := m.MarshalCBOR()
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := V001Entry{
+			CoseObj: models.CoseV001Schema{Message: msg, Data: &models.CoseV001SchemaData{}, PublicKey: p(pub)},
+			keyObj:  keyObj,
+		}
+		if err := v.validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got, err := v.IndexKeys()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return got
+	}
+
+	t.Run("iss and sub indexed", func(t *testing.T) {
+		got := build(t, map[any]any{
+			gocose.CWTClaimIssuer:  "did:web:issuer.example",
+			gocose.CWTClaimSubject: "pkg:oci/example-app@sha256:abcd",
+		})
+		mustContain(t, "cwt:iss:did:web:issuer.example", got)
+		mustContain(t, "cwt:sub:pkg:oci/example-app@sha256:abcd", got)
+	})
+
+	t.Run("only sub present", func(t *testing.T) {
+		got := build(t, map[any]any{gocose.CWTClaimSubject: "sub-only"})
+		mustContain(t, "cwt:sub:sub-only", got)
+		mustNotContainPrefix(t, "cwt:iss:", got)
+	})
+
+	t.Run("non-string values ignored", func(t *testing.T) {
+		got := build(t, map[any]any{
+			gocose.CWTClaimIssuer:  []byte("bytes-iss"),
+			gocose.CWTClaimSubject: int64(42),
+		})
+		mustNotContainPrefix(t, "cwt:iss:", got)
+		mustNotContainPrefix(t, "cwt:sub:", got)
+	})
+
+	t.Run("claims not a map ignored", func(t *testing.T) {
+		got := build(t, "not-a-map")
+		mustNotContainPrefix(t, "cwt:iss:", got)
+		mustNotContainPrefix(t, "cwt:sub:", got)
+	})
+
+	t.Run("no claims", func(t *testing.T) {
+		got := build(t, nil)
+		mustNotContainPrefix(t, "cwt:iss:", got)
+		mustNotContainPrefix(t, "cwt:sub:", got)
+	})
+
+	t.Run("oversized value skipped", func(t *testing.T) {
+		// prefix "cwt:sub:" is 8 chars; a value that pushes the full key past
+		// maxIndexKeyLength must be skipped.
+		got := build(t, map[any]any{gocose.CWTClaimSubject: strings.Repeat("a", maxIndexKeyLength)})
+		mustNotContainPrefix(t, "cwt:sub:", got)
+	})
+
+	t.Run("max-length value indexed", func(t *testing.T) {
+		// Value sized so the full namespaced key is exactly maxIndexKeyLength.
+		val := strings.Repeat("a", maxIndexKeyLength-len("cwt:sub:"))
+		got := build(t, map[any]any{gocose.CWTClaimSubject: val})
+		mustContain(t, "cwt:sub:"+val, got)
+	})
 }
 
 func TestInsertable(t *testing.T) {
