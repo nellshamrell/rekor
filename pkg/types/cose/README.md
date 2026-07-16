@@ -24,6 +24,46 @@ The "Body" field will include an "coseObj" field.
   are recognized and parsed. The found subject hashes are indexed so
   they can be searched for.
 
+**Supported signature algorithms**
+
+The COSE signature is verified with
+[veraison/go-cose](https://github.com/veraison/go-cose). The signing
+algorithm is inferred from the supplied public key:
+
+- ECDSA `P-256` → `ES256`, `P-384` → `ES384`, `P-521` → `ES512`
+- Ed25519 → `EdDSA`
+- RSA → `PS256`
+
+The algorithm advertised in the COSE protected header must match, or
+verification fails.
+
+**SCITT CWT_Claims indexing**
+
+If the COSE protected header contains `CWT_Claims` (label `15`, see
+[RFC 9597](https://datatracker.ietf.org/doc/html/rfc9597)) — as used by
+[SCITT](https://scitt.io) Signed Statements — the issuer (`iss`, claim
+`1`) and subject (`sub`, claim `2`) string values are indexed as
+`cwt:iss:<value>` and `cwt:sub:<value>` so they can be searched for.
+The claim value is lowercased before indexing, so lookups are
+case-insensitive (the search API lowercases the query), consistent with
+how other Rekor index keys are canonicalized. Only string claim values
+are indexed, and only when the resulting namespaced index key fits
+within the 512-character index key limit (matching the `VARCHAR(512)`
+index column); missing or malformed CWT_Claims are ignored.
+
+Search using the full namespaced key as the subject, for example:
+
+```
+rekor-cli search --subject "cwt:sub:pkg:oci/example-app@sha256:abcd"
+rekor-cli search --subject "cwt:iss:did:web:issuer.example"
+```
+
+Note that this indexing applies to newly submitted entries only — the
+canonical stored body does not retain the raw COSE envelope, so the
+existing canonical-entry backfill cannot reconstruct these keys. Any CWT
+index keys not captured correctly at submission time (for example,
+entries logged before this feature) cannot be recovered later.
+
 **What data about the envelope is stored in Rekor**
 
 Only the hash of the payload, the hash of the COSE envelope and the
