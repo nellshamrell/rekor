@@ -32,6 +32,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/strfmt"
@@ -937,6 +938,34 @@ func TestV001Entry_IndexKeysCWTClaims(t *testing.T) {
 		val := strings.Repeat("a", maxIndexKeyLength-len("cwt:sub:"))
 		got := build(t, map[any]any{gocose.CWTClaimSubject: val})
 		mustContain(t, "cwt:sub:"+val, got)
+	})
+
+	t.Run("mixed-case value lowercased", func(t *testing.T) {
+		// Index keys are lowercased so they match the search API, which
+		// lowercases the query before lookup.
+		got := build(t, map[any]any{
+			gocose.CWTClaimIssuer:  "DID:WEB:Issuer.Example",
+			gocose.CWTClaimSubject: "PKG:OCI/Example-App",
+		})
+		mustContain(t, "cwt:iss:did:web:issuer.example", got)
+		mustContain(t, "cwt:sub:pkg:oci/example-app", got)
+	})
+
+	t.Run("multibyte value bounded by rune count", func(t *testing.T) {
+		// The length cap counts characters (runes), not bytes, matching the
+		// VARCHAR(512) column. This value is 512 runes (8 prefix + 504 value)
+		// but >512 bytes, so it must be indexed even though its byte length
+		// exceeds the bound. U+00E9 (é) is unchanged by lowercasing.
+		val := strings.Repeat("\u00e9", maxIndexKeyLength-len("cwt:sub:"))
+		key := "cwt:sub:" + val
+		if utf8.RuneCountInString(key) != maxIndexKeyLength {
+			t.Fatalf("test setup: got %d runes, want %d", utf8.RuneCountInString(key), maxIndexKeyLength)
+		}
+		if len(key) <= maxIndexKeyLength {
+			t.Fatalf("test setup: expected byte length >%d, got %d", maxIndexKeyLength, len(key))
+		}
+		got := build(t, map[any]any{gocose.CWTClaimSubject: val})
+		mustContain(t, key, got)
 	})
 }
 

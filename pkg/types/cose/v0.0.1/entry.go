@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag/conv"
@@ -158,14 +159,17 @@ func (v V001Entry) IndexKeys() ([]string, error) {
 	return result, nil
 }
 
-// maxIndexKeyLength bounds the length of an index key. The index storage
-// layers cap key length (MySQL uses VARCHAR(512)), so oversized keys are
-// skipped rather than risking a failed or truncated index write.
+// maxIndexKeyLength bounds the length of an index key, measured in characters
+// (runes). The index storage layers cap key length (MySQL uses VARCHAR(512),
+// which counts characters), so oversized keys are skipped rather than risking a
+// failed or truncated index write.
 const maxIndexKeyLength = 512
 
 // cwtIndexKey returns the namespaced index key for a CWT claim if the claim is
 // present, a non-empty string, and the resulting key fits within the index key
-// length bound. CBOR integer labels decode as int64.
+// length bound. The claim value is lowercased so lookups (which lowercase the
+// query) match regardless of database collation, consistent with how other
+// Rekor index keys are canonicalized. CBOR integer labels decode as int64.
 func cwtIndexKey(claims map[any]any, label int64, prefix string) (string, bool) {
 	raw, ok := claims[label]
 	if !ok {
@@ -175,8 +179,8 @@ func cwtIndexKey(claims map[any]any, label int64, prefix string) (string, bool) 
 	if !ok || s == "" {
 		return "", false
 	}
-	key := prefix + s
-	if len(key) > maxIndexKeyLength {
+	key := prefix + strings.ToLower(s)
+	if utf8.RuneCountInString(key) > maxIndexKeyLength {
 		return "", false
 	}
 	return key, true

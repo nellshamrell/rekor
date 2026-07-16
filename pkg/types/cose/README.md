@@ -44,12 +44,25 @@ If the COSE protected header contains `CWT_Claims` (label `15`, see
 [SCITT](https://scitt.io) Signed Statements — the issuer (`iss`, claim
 `1`) and subject (`sub`, claim `2`) string values are indexed as
 `cwt:iss:<value>` and `cwt:sub:<value>` so they can be searched for.
-Only string claim values are indexed, and only when the resulting
-namespaced index key fits within the 512-byte index key limit; missing
-or malformed CWT_Claims are ignored. Note that this indexing applies to
-newly submitted entries only — the canonical stored body does not retain
-the raw COSE envelope, so existing entries cannot be backfilled with
-these keys.
+The claim value is lowercased before indexing, so lookups are
+case-insensitive (the search API lowercases the query), consistent with
+how other Rekor index keys are canonicalized. Only string claim values
+are indexed, and only when the resulting namespaced index key fits
+within the 512-character index key limit (matching the `VARCHAR(512)`
+index column); missing or malformed CWT_Claims are ignored.
+
+Search using the full namespaced key as the subject, for example:
+
+```
+rekor-cli search --subject "cwt:sub:pkg:oci/example-app@sha256:abcd"
+rekor-cli search --subject "cwt:iss:did:web:issuer.example"
+```
+
+Note that this indexing applies to newly submitted entries only — the
+canonical stored body does not retain the raw COSE envelope, so the
+existing canonical-entry backfill cannot reconstruct these keys. Any CWT
+index keys not captured correctly at submission time (for example,
+entries logged before this feature) cannot be recovered later.
 
 **What data about the envelope is stored in Rekor**
 
