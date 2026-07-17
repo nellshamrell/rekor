@@ -4,9 +4,12 @@
     "title": "COSE Schema",
     "description": "COSE for Rekord objects",
     "type": "object",
-    "oneOf": [
+    "anyOf": [
         {
             "$ref": "v0.0.1/cose_v0_0_1_schema.json"
+        },
+        {
+            "$ref": "v0.0.2/cose_v0_0_2_schema.json"
         }
     ]
 }

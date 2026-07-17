@@ -1,3 +1,9 @@
+# Unreleased
+
+## Features
+
+* Add hash-only `cose` v0.0.2 type: verifies the COSE_Sign1 envelope at ingest and stores only hashes (payloadHash/envelopeHash), never persisting the envelope, for Rekor v2 compatibility. Broadens signature algorithms (ES256/ES384/ES512/EdDSA/PS256) and indexes SCITT CWT_Claims (iss/sub) and COSE Hash Envelope (RFC 9995) preimage digests.
+
 # v1.5.3
 
 ## Features

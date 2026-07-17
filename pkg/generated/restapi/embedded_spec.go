@@ -1524,6 +1524,106 @@ func init() {
       },
       "readOnly": true
     },
+    "CoseV002SchemaData": {
+      "description": "Information about the content associated with the entry",
+      "type": "object",
+      "properties": {
+        "aad": {
+          "description": "Specifies the additional authenticated data required to verify the signature",
+          "type": "string",
+          "format": "byte",
+          "writeOnly": true
+        },
+        "envelopeHash": {
+          "description": "Specifies the hash algorithm and value for the COSE envelope",
+          "type": "object",
+          "required": [
+            "algorithm",
+            "value"
+          ],
+          "properties": {
+            "algorithm": {
+              "description": "The hashing function used to compute the hash value",
+              "type": "string",
+              "enum": [
+                "sha256"
+              ]
+            },
+            "value": {
+              "description": "The hash value for the envelope",
+              "type": "string"
+            }
+          },
+          "readOnly": true
+        },
+        "payloadHash": {
+          "description": "Specifies the hash algorithm and value for the content",
+          "type": "object",
+          "required": [
+            "algorithm",
+            "value"
+          ],
+          "properties": {
+            "algorithm": {
+              "description": "The hashing function used to compute the hash value",
+              "type": "string",
+              "enum": [
+                "sha256"
+              ]
+            },
+            "value": {
+              "description": "The hash value for the content",
+              "type": "string"
+            }
+          },
+          "readOnly": true
+        }
+      }
+    },
+    "CoseV002SchemaDataEnvelopeHash": {
+      "description": "Specifies the hash algorithm and value for the COSE envelope",
+      "type": "object",
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "description": "The hashing function used to compute the hash value",
+          "type": "string",
+          "enum": [
+            "sha256"
+          ]
+        },
+        "value": {
+          "description": "The hash value for the envelope",
+          "type": "string"
+        }
+      },
+      "readOnly": true
+    },
+    "CoseV002SchemaDataPayloadHash": {
+      "description": "Specifies the hash algorithm and value for the content",
+      "type": "object",
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "description": "The hashing function used to compute the hash value",
+          "type": "string",
+          "enum": [
+            "sha256"
+          ]
+        },
+        "value": {
+          "description": "The hash value for the content",
+          "type": "string"
+        }
+      },
+      "readOnly": true
+    },
     "DSSEV001SchemaEnvelopeHash": {
       "description": "Specifies the hash algorithm and value encompassing the entire envelope sent to Rekor",
       "type": "object",
@@ -2957,9 +3057,12 @@ func init() {
       "description": "COSE for Rekord objects",
       "type": "object",
       "title": "COSE Schema",
-      "oneOf": [
+      "anyOf": [
         {
           "$ref": "#/definitions/coseV001Schema"
+        },
+        {
+          "$ref": "#/definitions/coseV002Schema"
         }
       ],
       "$schema": "http://json-schema.org/draft-07/schema",
@@ -3043,6 +3146,85 @@ func init() {
       },
       "$schema": "http://json-schema.org/draft-07/schema",
       "$id": "http://rekor.sigstore.dev/types/cose/cose_v0_0_1_schema.json"
+    },
+    "coseV002Schema": {
+      "description": "Schema for cose object. Unlike v0.0.1, the COSE Sign1 envelope is never persisted by the log: it is verified at ingest and only hashed values are stored.",
+      "type": "object",
+      "title": "cose v0.0.2 Schema",
+      "required": [
+        "publicKey"
+      ],
+      "properties": {
+        "data": {
+          "description": "Information about the content associated with the entry",
+          "type": "object",
+          "properties": {
+            "aad": {
+              "description": "Specifies the additional authenticated data required to verify the signature",
+              "type": "string",
+              "format": "byte",
+              "writeOnly": true
+            },
+            "envelopeHash": {
+              "description": "Specifies the hash algorithm and value for the COSE envelope",
+              "type": "object",
+              "required": [
+                "algorithm",
+                "value"
+              ],
+              "properties": {
+                "algorithm": {
+                  "description": "The hashing function used to compute the hash value",
+                  "type": "string",
+                  "enum": [
+                    "sha256"
+                  ]
+                },
+                "value": {
+                  "description": "The hash value for the envelope",
+                  "type": "string"
+                }
+              },
+              "readOnly": true
+            },
+            "payloadHash": {
+              "description": "Specifies the hash algorithm and value for the content",
+              "type": "object",
+              "required": [
+                "algorithm",
+                "value"
+              ],
+              "properties": {
+                "algorithm": {
+                  "description": "The hashing function used to compute the hash value",
+                  "type": "string",
+                  "enum": [
+                    "sha256"
+                  ]
+                },
+                "value": {
+                  "description": "The hash value for the content",
+                  "type": "string"
+                }
+              },
+              "readOnly": true
+            }
+          }
+        },
+        "message": {
+          "description": "The COSE Sign1 Message",
+          "type": "string",
+          "format": "byte",
+          "writeOnly": true
+        },
+        "publicKey": {
+          "description": "The public key that can verify the signature",
+          "type": "string",
+          "format": "byte"
+        }
+      },
+      "$schema": "http://json-schema.org/draft-07/schema",
+      "$id": "http://rekor.sigstore.dev/types/cose/cose_v0_0_2_schema.json"
     },
     "dsse": {
       "description": "DSSE envelope",
